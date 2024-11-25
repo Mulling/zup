@@ -76,6 +76,7 @@ const DownloadResult = union(enum) {
         }
     }
 };
+
 fn download(allocator: Allocator, url: []const u8, writer: anytype) DownloadResult {
     const uri = std.Uri.parse(url) catch |err| std.debug.panic("failed to parse url '{s}' with {s}", .{ url, @errorName(err) });
 
@@ -164,19 +165,19 @@ fn help() void {
         \\
         \\Common Usage:
         \\
-        \\  zigup VERSION                 download and set VERSION compiler as default
-        \\  zigup fetch VERSION           download VERSION compiler
-        \\  zigup default [VERSION]       get or set the default compiler
-        \\  zigup undefine                unset the default compiler
-        \\  zigup list                    list installed compiler versions
-        \\  zigup clean   [VERSION]       deletes the given compiler version, otherwise, cleans all compilers
+        \\  zup VERSION                 download and set VERSION compiler as default
+        \\  zup fetch VERSION           download VERSION compiler
+        \\  zup default [VERSION]       get or set the default compiler
+        \\  zup undefine                unset the default compiler
+        \\  zup list                    list installed compiler versions
+        \\  zup clean   [VERSION]       deletes the given compiler version, otherwise, cleans all compilers
         \\                                that aren't the default, master, or marked to keep
-        \\  zigup keep VERSION            mark a compiler to be kept during clean
-        \\  zigup run VERSION ARGS...     run the given VERSION of the compiler with the given ARGS...
+        \\  zup keep VERSION            mark a compiler to be kept during clean
+        \\  zup run VERSION ARGS...     run the given VERSION of the compiler with the given ARGS...
         \\
         \\Uncommon Usage:
         \\
-        \\  zigup fetch-index             download and print the download index json
+        \\  zup fetch-index             download and print the download index json
         \\
         \\Common Options:
         \\  --verbose | -v                output verbose information

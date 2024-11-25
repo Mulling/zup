@@ -98,8 +98,8 @@ fn addZigupExe(
     };
 
     const exe = b.addExecutable(.{
-        .name = "zigup",
-        .root_source_file = b.path("zigup.zig"),
+        .name = "zup",
+        .root_source_file = b.path("zup.zig"),
         .target = target,
         .optimize = optimize,
     });
