@@ -1,6 +1,6 @@
 # zup
 
-[zigup](https://marler8997.github.io/zigup) fork, download and manage zig compilers.
+[zigup](https://github.com/marler8997/zigup) fork, download and manage zig compilers.
 
 # How to Install
 
