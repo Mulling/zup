@@ -62,6 +62,11 @@ inline fn logw(comptime fmt: []const u8, args: anytype) void {
     std.log.warn(fix_format_string(fmt), args);
 }
 
+inline fn die(comptime fmt: []const u8, args: anytype) noreturn {
+    loge(fmt, args);
+    std.process.exit(1);
+}
+
 pub fn oom(e: error{OutOfMemory}) noreturn {
     @panic(@errorName(e));
 }
@@ -85,10 +90,12 @@ fn download(allocator: Allocator, url: []const u8, writer: anytype) DownloadResu
 
     client.initDefaultProxies(allocator) catch |err| return .{ .err = std.fmt.allocPrint(allocator, "failed to query the HTTP proxy settings with {s}", .{@errorName(err)}) catch |e| oom(e) };
 
-    var header_buffer: [4096]u8 = undefined;
+    // FIXME: WTF
+    var header_buffer: [16000]u8 = undefined;
     var request = client.open(.GET, uri, .{
         .server_header_buffer = &header_buffer,
-        .keep_alive = false,
+        .headers = .{ .accept_encoding = .{ .override = "*/*" }, .user_agent = .{ .override = "zup" } },
+        .keep_alive = true,
     }) catch |err| return .{ .err = std.fmt.allocPrint(allocator, "failed to connect to the HTTP server with {s}", .{@errorName(err)}) catch |e| oom(e) };
 
     defer request.deinit();
@@ -117,8 +124,10 @@ const DownloadStringResult = union(enum) {
     ok: []u8,
     err: []u8,
 };
+
 fn downloadToString(allocator: Allocator, url: []const u8) DownloadStringResult {
-    var response_array_list = ArrayList(u8).initCapacity(allocator, 20 * 1024) catch |e| oom(e); // 20 KB (modify if response is expected to be bigger)
+    // FIXME: WTF
+    var response_array_list = ArrayList(u8).initCapacity(allocator, 100 * 1024) catch |e| oom(e); // 20 KB (modify if response is expected to be bigger)
     defer response_array_list.deinit();
     switch (download(allocator, url, response_array_list.writer())) {
         .ok => return .{ .ok = response_array_list.toOwnedSlice() catch |e| oom(e) },
@@ -180,7 +189,7 @@ fn help() void {
         \\  zup fetch-index             download and print the download index json
         \\
         \\Common Options:
-        \\  --verbose | -v                output verbose information
+        \\  --verbose | -v              output verbose information
         \\
     ) catch unreachable;
 }
@@ -267,31 +276,22 @@ const ZigupConfig = struct {
 };
 
 pub fn configure(allocator: Allocator) !void {
-    if (!try yesOrNoP("Could not get config from env, configure zigup?")) {
+    if (!std.posix.isatty(std.io.getStdOut().handle))
+        return error.NonInteractiveTerminal;
+
+    if (!try yesOrNoP("Could not get config from env, configure zup?")) {
         return error.ConfigAborted;
     }
 
-    const home = std.posix.getenv("HOME") orelse @panic("$HOME is not in env");
-    const default_path = try std.fmt.allocPrint(allocator, "{s}/.zigup", .{home});
+    const install_dir = try getInstallDir(allocator);
 
-    logi("default zigup_path = '{s}'", .{default_path});
-
-    const path_prompt = try std.fmt.allocPrint(allocator, "Install path for zigup (default: {s}): ", .{default_path});
-
-    var path = try promptUserAlloc(allocator, path_prompt);
-
-    if (path.len == 0) path = default_path;
-
-    // TODO: Prompt if the users wants to change this
-    // const install_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{path});
-
-    if (!std.posix.isatty(std.io.getStdOut().handle))
-        return error.NonInteractiveTerminal;
+    const install_dir_info = try std.fmt.allocPrint(allocator, "Install path for zup is '{s}' ", .{install_dir});
+    try std.io.getStdOut().writeAll(install_dir_info);
 
     // TODO: add zsh
     // TODO: add fish
     if (isBash()) {
-        try outputPosixShellEnv(allocator, path);
+        try outputPosixShellEnv(allocator, install_dir);
     } else {
         @panic("Could not guess the current shell");
     }
@@ -301,58 +301,82 @@ inline fn isBash() bool {
     return std.mem.endsWith(u8, std.posix.getenv("SHELL") orelse return false, "bash");
 }
 
-const shellEnvFmt =
+const posixShellEnvFmt =
     \\#!/bin/sh
     \\
-    \\# Path to env
-    \\export ZIGUP_DIR="{s}"
-    \\# Path to cache
-    \\export ZIGUP_INSTALL_DIR="$ZIGUP_DIR/cache"
-    \\
     \\case ":$PATH:" in
-    \\    *:"$ZIGUP_DIR/default":*)
+    \\    *:"{s}/default":*)
     \\        ;;
     \\    *)
     \\        # Prepend to override system-hide install
-    \\        export PATH="$ZIGUP_DIR/default:$PATH"
+    \\        export PATH="{s}/default:$PATH"
     \\        ;;
     \\esac
     \\
 ;
 
-const sourceEnvFmt =
-    \\[ -f \"{s}\" ] && source \"{s}\"
+const posixSourceEnvFmt =
+    \\[ -f "{s}" ] && source "{s}"
 ;
 
 pub fn outputPosixShellEnv(allocator: Allocator, path: []const u8) !void {
     const env = try std.fmt.allocPrint(
         allocator,
-        shellEnvFmt,
-        .{path},
+        posixShellEnvFmt,
+        .{ path, path },
     );
-    logi("bash env: \n{s}", .{env});
+    logi("posix env: \n{s}", .{env});
 
     try makeDirIfMissing(path);
 
     const env_file = try std.fs.path.join(allocator, &[_][]const u8{ path, "env" });
 
     const fd = try std.fs.createFileAbsolute(env_file, .{});
-    errdefer fd.close();
+    defer fd.close();
 
     try fd.writeAll(env);
 
-    const bash_config = try std.fmt.allocPrint(allocator, sourceEnvFmt, .{ env_file, env_file });
+    const bash_config = try std.fmt.allocPrint(allocator, posixSourceEnvFmt, .{ env_file, env_file });
 
+    // TODO: add other shells
     try std.io.getStdOut().writeAll("Add this to your .bashrc:\n");
     try std.io.getStdOut().writeAll(bash_config);
 }
 
-pub fn readConfigFromEnv(allocator: Allocator) !?ZigupConfig {
-    // TODO: Allow override of install_path
-    return try ZigupConfig.init(
-        allocator,
-        std.posix.getenv("ZIGUP_DIR") orelse return null,
-    );
+fn getInstallDir(allocator: Allocator) ![]const u8 {
+    // TODO: Windows
+    // TODO: macOS
+    return if (std.posix.getenv("XDG_STATE_HOME")) |xdg_state|
+        try std.fs.path.join(allocator, &[_][]const u8{ xdg_state, "zup" })
+    else if (std.posix.getenv("HOME")) |home|
+        // Hide it in the home
+        try std.fs.path.join(allocator, &[_][]const u8{ home, ".zup" })
+    else
+        die("$HOME is not defined", .{});
+}
+
+pub fn getConfig(allocator: Allocator) !?ZigupConfig {
+    const install_dir = try getInstallDir(allocator);
+
+    logi("install dir is '{s}'", .{install_dir});
+
+    var dir = std.fs.openDirAbsolute(install_dir, .{ .iterate = true }) catch |err| switch (err) {
+        // we will create it later
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    errdefer dir.close();
+
+    const env_path = try std.fs.path.join(allocator, &[_][]const u8{ install_dir, "env" });
+
+    var env = std.fs.openFileAbsolute(env_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer env.close();
+
+    // if env exists, zup is configured
+    return try ZigupConfig.init(allocator, install_dir);
 }
 
 pub fn main() !u8 {
@@ -374,7 +398,7 @@ pub fn zigup() !u8 {
     // no need to free, os will do it
     //defer std.process.argsFree(allocator, argsArray);
 
-    const config = try readConfigFromEnv(allocator) orelse {
+    const config = try getConfig(allocator) orelse {
         try configure(allocator);
         // NOTE: We could just make zigup work here, but we should assert that
         // the user does the proper shell configuration. One way of doing this
@@ -416,7 +440,7 @@ pub fn zigup() !u8 {
     }
     if (args.len == 0) {
         help();
-        return 1;
+        return 0;
     }
     if (std.mem.eql(u8, "fetch-index", args[0])) {
         if (args.len != 1) {
