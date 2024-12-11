@@ -65,6 +65,7 @@ cp zig-out/bin/zup BIN_PATH
 
 # TODO
 
+- [ ] Cache the compiler index.json, update once a day, add some way to `--force` the update
 - [ ] Download to memory
 - [ ] Use `std.tar` (Unix)
 - [ ] `zup system` and `zup default system`
